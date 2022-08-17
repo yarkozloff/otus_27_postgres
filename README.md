@@ -115,7 +115,51 @@ yar99=# select * from person;
   2 | andrew     | morrow    | 0      | andrrr@gmail.com | usa
 (1 row)
 ```
+
+## Тестирвоание
+Проверим репликацию с мастера:
+```
+yar99=# select * from pg_stat_replication;
+-[ RECORD 1 ]----+-----------------------------
+pid              | 22466
+usesysid         | 16384
+usename          | repl_user
+application_name | walreceiver
+client_addr      | 192.168.50.11
+client_hostname  |
+client_port      | 47364
+backend_start    | 2022-08-17 20:07:01.60756+00
+backend_xmin     |
+state            | streaming
+sent_lsn         | 0/6000910
+write_lsn        | 0/6000910
+flush_lsn        | 0/6000910
+replay_lsn       | 0/6000910
+write_lag        | 00:00:00.001656
+flush_lag        | 00:00:00.003859
+replay_lag       | 00:00:00.004293
+sync_priority    | 0
+sync_state       | async
+```
+Также Получим текущую позицию записи в журнале предзаписи
+```
+yar99=# select * from pg_current_wal_lsn();
+-[ RECORD 1 ]------+----------
+pg_current_wal_lsn | 0/6000A28
+```
+На pgslave проверим что она такая же:
+```
+yar99=# select * from pg_last_wal_receive_lsn();;
+-[ RECORD 1 ]-----------+----------
+pg_last_wal_receive_lsn | 0/6000A28
+```
+pgslave находится в режиме восстановления, 
 Пробуем с мастера добавить еще строку в таблицу и понаблюдать в реплике:
 ![image](https://user-images.githubusercontent.com/69105791/185235181-834f62e1-3f58-4e33-a326-5763114cb9d5.png)
-Если попробовать выполнить insert с сервера pgslave то получим ошибку: ERROR:  cannot execute INSERT in a read-only transaction
+Если попробовать выполнить insert с сервера pgslave то получим ошибку: ERROR:  cannot execute INSERT in a read-only transaction. 
 
+В текущем примере была рассмотрена асинхронная репликация. В случае с синхронной реплкацией в postgresql.conf необходимо задать synchronous_standby_names = '*'
+
+это может потребовать перезапуска postgresql-11.service
+
+## Barman
