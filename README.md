@@ -88,4 +88,34 @@ yar99=# select * from person;
 (1 row)
 ```
 ## Настройка слэйва
-Аналогично мастеру устанавливаем необходимое ПО, настраиваем фаервол. Далее 
+Аналогично мастеру устанавливаем необходимое ПО, настраиваем фаервол. Далее проверяем что сервис стартует, останавливаем его, удаляем всё из каталога /var/lib/pgsql/11/data/ чтобы восстановить туда резервную копию с мастера:
+```
+/usr/pgsql-11/bin/pg_basebackup -h 192.168.50.10 -U repl_user -p 5432 -D /var/lib/pgsql/11/data -Fp -Xs -P -R -C -S repl_slot
+```
+Если машины провижить не в первый раз то можно получить ошибку при создании слота репликации: replication slot already exists. Это связано с тем, что используются одинаковое имя слота. Для того чтобы создать с таким же именем слот можно удалить командой в мастере: SELECT pg_drop_replication_slot('repl_slot');
+
+Далее каталогу /var/lib/pgsql/11/data необходимо выдать необходимые права и назначить владельца - postgres, иначе postgresql-11 не стартанет.
+
+После старта сервиса можно подключаться к реплике и проверить тестовую таблицу:
+```
+root@yarkozloff:/otus/pg# vagrant ssh pgslave
+Last login: Wed Aug 17 20:06:59 2022 from 10.0.2.2
+[vagrant@pgslave ~]$ sudo -i
+[root@pgslave ~]# su postgres
+bash-4.2$ psql
+could not change directory to "/root": Permission denied
+psql (11.17)
+Type "help" for help.
+
+postgres=# \c yar99;
+You are now connected to database "yar99" as user "postgres".
+yar99=# select * from person;
+ id | first_name | last_name | gender |     email_id     | country_of_birth
+----+------------+-----------+--------+------------------+------------------
+  2 | andrew     | morrow    | 0      | andrrr@gmail.com | usa
+(1 row)
+```
+Пробуем с мастера добавить еще строку в таблицу и понаблюдать в реплике:
+![image](https://user-images.githubusercontent.com/69105791/185235181-834f62e1-3f58-4e33-a326-5763114cb9d5.png)
+Если попробовать выполнить insert с сервера pgslave то получим ошибку: ERROR:  cannot execute INSERT in a read-only transaction
+
