@@ -1,0 +1,1 @@
+/pgbackup 192.168.50.10/32(rw,sync,root_squash)
