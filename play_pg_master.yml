@@ -1,0 +1,134 @@
+---
+- name: Deploy pgmaster postgresql11
+  hosts: pgmaster  #Мастер нода
+  become: yes
+  gather_facts: false
+  tasks:  
+  
+  - name: update yum caсhe
+    yum:
+      update_cache: true
+
+  - name: Add PostgreSQL11 Repo
+    yum:
+      name: #подкачаем пг из инета как советуют, а также пакеты необходимые для будущей установки barman
+        - http://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+        - http://download-ib01.fedoraproject.org/pub/epel/7/x86_64/Packages/p/python2-argcomplete-1.7.0-4.el7.noarch.rpm
+        - http://download-ib01.fedoraproject.org/pub/epel/7/aarch64/Packages/p/python2-argh-0.26.1-5.el7.noarch.rpm
+
+  - name: Install PostgreSQL11 and tools
+    yum:
+      name: 
+        - postgresql11-server
+        - vim
+        - nmap
+        - barman
+        - nfs-utils
+      state: present
+      
+  - name: Creates directory for barman
+    file:
+      path: /var/lib/barman/pgmaster
+      state: directory
+      mode: '0777'
+      
+  - name: Mount an NFS volume for backup
+    ansible.posix.mount:
+      src: 192.168.50.12:/pgbackup
+      path: /var/lib/barman/pgmaster
+      opts: rw,sync,hard
+      state: mounted
+      fstype: nfs
+
+  - name: Initialize Database
+    shell: /usr/pgsql-11/bin/postgresql-11-setup initdb
+    ignore_errors: yes ## if already exists
+
+  - name: copy pg_hba.conf
+    copy: 
+      src=files_master/pg_hba.conf
+      dest=/var/lib/pgsql/11/data/pg_hba.conf
+      
+  - name: copy postgresql.conf
+    copy: 
+      src=files_master/postgresql.conf
+      dest=/var/lib/pgsql/11/data/postgresql.conf
+      
+  - name: copy barman.conf
+    copy: 
+      src=files_master/barman.conf
+      dest=/etc/barman.conf
+      
+  - name: copy barman pg.conf for cluster pg
+    copy: 
+      src=files_master/pgmaster.conf
+      dest=/etc/barman.d/pgmaster.conf
+      
+  - name: copy barman pgpass
+    copy: 
+      src=files_master/.pgpass
+      dest=/var/lib/barman/.pgpass
+      mode=0600
+      
+  - name: Start a service postgresql-11
+    systemd:
+      name: postgresql-11.service
+      state: restarted
+      enabled: yes
+      
+  - name: Start a service firewalld if not started
+    systemd:
+      name: firewalld
+      state: restarted
+      enabled: yes
+
+  - name: permit firewalld postgresql service
+    ansible.posix.firewalld:
+      service: postgresql
+      permanent: yes
+      state: enabled
+      
+  - name: Just force systemd to reread configs (2.4 and above)
+    ansible.builtin.systemd:
+      daemon_reload: yes
+
+  - name: create repl_user
+    shell: psql -U postgres -d postgres -c "Create user repl_user with replication encrypted password 'Yarpg082022otus';"
+    ignore_errors: yes ## if already exists
+    
+  - name: create barman user
+    shell: psql -U postgres -d postgres -c "Create user barman superuser  password 'barman';"
+    ignore_errors: yes ## if already exists
+    
+  - name: create test db
+    shell: psql -U postgres -c "CREATE DATABASE yar99;"
+    ignore_errors: yes ## if already exists
+    
+  - name: create test table
+    shell: psql -U postgres -d yar99 -c "CREATE TABLE IF NOT EXISTS person (Id 	INT PRIMARY KEY, first_name VARCHAR(50) NOT NULL, last_name VARCHAR(50) NOT NULL, gender CHAR(1), email_id VARCHAR(100) UNIQUE, country_of_birth VARCHAR(50));"
+    ignore_errors: yes ## if already exists
+    
+  - name: barman PATH
+    become: yes
+    become_user: barman
+    shell: export PATH=$PATH:/usr/pgsql-11/bin
+    
+  - name: barman cron
+    become: yes
+    become_user: barman
+    shell: barman cron
+    
+  - name: barman create slot 
+    become: yes
+    become_user: barman
+    shell: barman receive-wal --create-slot pgmaster
+    ignore_errors: yes ## if already exists
+    
+  - name: barman receive-wal
+    become: yes
+    become_user: barman
+    shell: barman receive-wal pgmaster
+    ignore_errors: yes ## if already exists
+    
+  
+    

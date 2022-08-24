@@ -1,0 +1,48 @@
+---
+- name: Deploy pgmaster postgresql11
+  hosts: pgbackup  #идем настраивать мастер
+  become: yes
+  gather_facts: false
+  tasks:  
+  
+  - name: update yum caсhe
+    yum:
+      update_cache: true 
+
+  - name: Install nfs
+    yum:
+      name: 
+        - nfs-utils
+      state: present
+      
+  - name: Start a service nfs
+    systemd:
+      name: nfs 
+      state: restarted
+      enabled: yes
+      
+  - name: Start a service firewalld if not started
+    systemd:
+      name: firewalld
+      state: restarted
+      enabled: yes
+      
+  - name: copy exports
+    copy: 
+      src=files_pgbackup/exports
+      dest=/etc/exports
+      
+  - name: Enable nfs
+    shell: firewall-cmd --add-service="nfs3" \--add-service="rpc-bind" \--add-service="mountd" \--permanent && firewall-cmd --reload && systemctl enable nfs --now 
+  
+  - name: Creates directory
+    file:
+      path: /pgbackup
+      state: directory
+      owner: nfsnobody
+      mode: '0777'
+      
+  - name: exportfs 
+    shell: exportfs -r    
+  
+    

@@ -1,0 +1,68 @@
+---
+- name: Deploy pgmaster postgresql11
+  hosts: pgslave
+  become: yes
+  gather_facts: false
+  tasks:  
+  
+  - name: update yum caсhe
+    yum:
+      update_cache: true
+
+  - name: Add PostgreSQL11 Repo
+    yum:
+      name:
+        - http://download.postgresql.org/pub/repos/yum/reporpms/EL-7-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+
+  - name: Install PostgreSQL11
+    yum:
+      name: 
+        - postgresql11-server 
+        - vim
+        - nmap
+      state: present
+
+  - name: Initialize Database
+    shell: /usr/pgsql-11/bin/postgresql-11-setup initdb
+    ignore_errors: yes
+      
+  - name: Start a service postgresql-11
+    systemd:
+      name: postgresql-11.service
+      state: restarted
+      enabled: yes
+      
+  - name: Start a service firewalld if not started
+    systemd:
+      name: firewalld
+      state: restarted
+      enabled: yes
+
+  - name: permit firewalld postgresql service
+    ansible.posix.firewalld:
+      service: postgresql
+      permanent: yes
+      state: enabled
+       
+  - name: Stop a service postgresql-11
+    systemd: #Стопаем сервис пг перед репликацией
+      name: postgresql-11.service
+      state: stopped
+      enabled: yes
+      
+  - name: delete all data for copy from master
+    shell: rm -rf /var/lib/pgsql/11/data/*
+    
+  - name: crete replica
+    shell: /usr/pgsql-11/bin/pg_basebackup -h 192.168.50.10 -U repl_user -p 5432 -D /var/lib/pgsql/11/data -Fp -Xs -P -R -C -S repl_slot
+    
+  - name: change permissions for pg catalog #иначе сервис пг не стартанет
+    shell: chown -R postgres /var/lib/pgsql/11/data && chmod -R 0700 /var/lib/pgsql/11/data
+    ignore_errors: yes
+    
+  - name: Start a service postgresql-11
+    systemd: 
+      name: postgresql-11.service
+      state: started
+      enabled: yes
+  
