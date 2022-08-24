@@ -87,7 +87,7 @@ yar99=# select * from person;
   2 | andrew     | morrow    | 0      | andrrr@gmail.com | usa
 (1 row)
 ```
-## Настройка слэйва
+## Настройка реплики
 Аналогично мастеру устанавливаем необходимое ПО, настраиваем фаервол. Далее проверяем что сервис стартует, останавливаем его, удаляем всё из каталога /var/lib/pgsql/11/data/ чтобы восстановить туда резервную копию с мастера:
 ```
 /usr/pgsql-11/bin/pg_basebackup -h 192.168.50.10 -U repl_user -p 5432 -D /var/lib/pgsql/11/data -Fp -Xs -P -R -C -S repl_slot
@@ -116,7 +116,7 @@ yar99=# select * from person;
 (1 row)
 ```
 
-## Тестирвоание
+## Тестирование реплики
 Проверим репликацию с мастера:
 ```
 yar99=# select * from pg_stat_replication;
@@ -173,4 +173,124 @@ pgslave находится в режиме восстановления,
 - http://download-ib01.fedoraproject.org/pub/epel/7/aarch64/Packages/p/python2-argh-0.26.1-5.el7.noarch.rpm
 ```
 - Установить сам barman и nfs-utils
+- Создать и прмонтировать директорию для barman
+- Подготовить и скопировать конфиг barman :
+```
+[barman]
+active = true
+barman_user = barman
+barman_home = /var/lib/barman
+configuration_files_directory = /etc/barman.d
+log_file = /var/log/barman/barman.log
+log_level = INFO
+compression = gzip
+retention_policy = REDUNDANCY 3
+immediate_checkpoint = true
+last_backup_maximum_age = 4 DAYS
+minimum_redundancy = 1
+```
+- Подготовить и скопировать конфиг для конкретного кластера pg:
+```
+[pgmaster]
+description =  "Postgres DB"
+conninfo = host=localhost user=barman dbname=postgres
+backup_method = postgres
+archiver = off
+path_prefix = /usr/pgsql-11/bin
+streaming_conninfo =  host=localhost user=barman
+streaming_archiver = on
+slot_name = barman
+create_slot = auto
+```
+- В базе создать суперпользователя barman
+- Создать слот для pgmaster и проверить настройки потоковой передачи файлов WAL
+### Тестирование
+В связи с многократными конфигурациями, машины были пересозданы и запровижены командами vagrant destroy -f и vagrant up. Трудности:
+- pgmaster может при первом provision встрять на выполнении таски Install PostgreSQL11 and tools, при повторой попытке всё ок
+- если неоднократно провиженить pgmaster то таски с использованием psql могут вернуть ошибки, которые просто игнорируются и не сказываются на работоспособности
+Поднимаем машины, подключаемся к pgmaster, добавляем для тестирования строку в таблицу:
+```
+root@yarkozloff:/otus/pg# vagrant ssh pgmaster
+Last login: Wed Aug 24 19:41:00 2022 from 10.0.2.2
+[vagrant@pgmaster ~]$ sudo -i
+[root@pgmaster ~]# su postgres
+bash-4.2$ psql
+could not change directory to "/root": Permission denied
+psql (11.17)
+Type "help" for help.
 
+postgres=# \c yar99;
+You are now connected to database "yar99" as user "postgres".
+yar99=# select * from person;
+ id | first_name | last_name | gender | email_id | country_of_birth
+----+------------+-----------+--------+----------+------------------
+(0 rows)
+
+yar99=# insert into person (id, first_name, last_name, gender, email_id, country_of_birth) values (1,'yar', 'morrow', 0, 'yaarrr@gmail.com', 'rus');
+INSERT 0 1
+yar99=# select * from person;
+ id | first_name | last_name | gender |     email_id     | country_of_birth
+----+------------+-----------+--------+------------------+------------------
+  1 | yar        | morrow    | 0      | yaarrr@gmail.com | rus
+(1 row)
+```
+Логинимся под учеткой barman и проверяем конфигурацию:
+```
+bash-4.2$ barman check pgmaster
+Server pgmaster:
+        PostgreSQL: OK
+        superuser or standard user with backup privileges: OK
+        PostgreSQL streaming: OK
+        wal_level: OK
+        replication slot: OK
+        directories: OK
+        retention policy settings: OK
+        backup maximum age: FAILED (interval provided: 4 days, latest backup age: No available backups)
+        backup minimum size: OK (0 B)
+        wal maximum age: OK (no last_wal_maximum_age provided)
+        wal size: OK (0 B)
+        compression settings: OK
+        failed backups: OK (there are 0 failed backups)
+        minimum redundancy requirements: FAILED (have 0 backups, expected at least 1)
+        pg_basebackup: OK
+        pg_basebackup compatible: OK
+        pg_basebackup supports tablespaces mapping: OK
+        systemid coherence: OK (no system Id stored on disk)
+        pg_receivexlog: OK
+        pg_receivexlog compatible: OK
+        receive-wal running: OK
+        archiver errors: OK
+```
+Проверка создания бэкапа:
+```
+bash-4.2$ barman backup pgmaster
+Starting backup using postgres method for server pgmaster in /var/lib/barman/pgmaster/base/20220824T201212
+Backup start at LSN: 0/3000430 (000000010000000000000003, 00000430)
+Starting backup copy via pg_basebackup for 20220824T201212
+Copy done (time: 1 minute, 2 seconds)
+Finalising the backup.
+This is the first backup for server pgmaster
+WAL segments preceding the current backup have been found:
+        000000010000000000000001 from server pgmaster has been removed
+        000000010000000000000002 from server pgmaster has been removed
+        000000010000000000000003 from server pgmaster has been removed
+Backup size: 31.2 MiB
+Backup end at LSN: 0/5000060 (000000010000000000000005, 00000060)
+Backup completed (start time: 2022-08-24 20:12:12.576773, elapsed time: 1 minute, 17 seconds)
+Processing xlog segments from streaming for pgmaster
+        000000010000000000000005
+```
+Набор резервных копий:
+```
+bash-4.2$ barman list-backup all
+pgmaster 20220824T201212 - Wed Aug 24 20:13:15 2022 - Size: 31.2 MiB - WAL Size: 0 B
+```
+Ставим задание в крон:
+```
+30 23 * * * /usr/bin/barman backup pgmaster
+* * * * * /usr/bin/barman cron
+* 23 * * */7 /usr/bin/barman delete pgmaster oldest
+```
+Первая команда будет запускать полное резервное копирование * main-db-server * каждую ночь в 23:30
+Вторая команда будет запускаться каждую минуту и выполнять операции обслуживания как файлов WAL, так и базовых файлов резервных копий
+Третья - удаление старых бэкапов каждое воскресенье в 11 часов вечера
